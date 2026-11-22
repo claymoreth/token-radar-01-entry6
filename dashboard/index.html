@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Launch Radar — radar-7</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <div>
+    <h1>Launch Radar</h1>
+    <p class="sub">Pre-token protocols, valued from their own record — not from hype.</p>
+  </div>
+  <div class="badges"><span class="badge" id="badge-model">radar-7</span><span class="badge" id="badge-asof"></span></div>
+</header>
+
+<section class="kpis" id="kpis" aria-label="Key figures"></section>
+
+<p class="implied">Implied value = TVL × fitted multiple × token odds. The multiple is fitted from priced peers; the odds are the chance a token like this one actually trades — fitted from peers whose tokens do trade, and peers with no token at all. Protocols in between, whose ticker is recorded but whose token does not trade, are left out of the odds training, not forced into either side. Nothing here is a promise — it is a priced guess, with the misses shown below.</p>
+
+<section class="panel">
+  <h2>Protocol accounting</h2>
+  <div class="stackbar" id="stackbar"></div>
+  <div class="legend" id="legend"></div>
+  <p class="note" id="acct-note"></p>
+</section>
+
+<section class="panel">
+  <h2>Integrity — recomputed in your browser</h2>
+  <div class="checks" id="checks"></div>
+  <p class="note">Every check above is recalculated from the data file on this page, not copied from a report. A red ✗ means the table and its own ledger disagree — trust neither until it is fixed.</p>
+</section>
+
+<section class="panel">
+  <h2>Out-of-sample evidence</h2>
+  <h3>Value terms — can the model price a protocol it has never seen?</h3>
+  <p class="note">Leave-one-out (LOO) refits the model without one priced peer and prices it; walk-forward trains only on older listings and prices newer ones. Miss is median absolute log error, shown as a factor — lower is better. A term is kept only if it lowers the miss in both tests.</p>
+  <table class="ev"><thead><tr><th>Term</th><th>LOO miss</th><th>Walk-forward miss</th><th>Status</th></tr></thead><tbody id="ev-value"></tbody></table>
+  <p class="note" id="ev-value-note"></p>
+  <h3>Token odds — can the model tell which protocols' tokens trade?</h3>
+  <p class="note">Brier score on traded-token / no-token, ten-fold and walk-forward. The base rate is the share of tracked protocols whose token trades (a positive market cap on a positive TVL). That is a narrower question than whether DefiLlama records a ticker: a recorded ticker can belong to a parent product or a line that never trades on its own, so this model answers "does the token trade?", not "is a ticker written down?". It trains on fewer protocols than a ticker-based model would — about 290 instead of 442 — and its base rate is lower, about 32% instead of 55%. What it buys for that is steadiness over time: the walk-forward Brier beats its own baseline by a wide margin, where the ticker-based target barely improves on its baseline. Family and category enter as two separate ridge groups of raw 0/1 dummies (λ=16 each), not one standardised block — the standardised block scored 0.301 walk-forward, worse than the numeric model alone. Odds carry launch uncertainty, so even a good Brier leaves wide ranges — that is why every row shows P25–P75, not a point.</p>
+  <table class="ev"><thead><tr><th>Term</th><th>Ten-fold Brier</th><th>Walk-forward Brier</th><th>Status</th></tr></thead><tbody id="ev-odds"></tbody></table>
+  <p class="note" id="ev-odds-note"></p>
+  <h3>Range honesty — do the stated ranges hold out of sample?</h3>
+  <p class="note">A P25–P75 band should contain the truth about half the time; P10–P90 about four fifths. These are held-out hit rates, not in-sample fits.</p>
+  <table class="ev"><thead><tr><th>Range</th><th>Stated</th><th>LOO</th><th>Walk-forward</th></tr></thead><tbody id="ev-range"></tbody></table>
+  <p class="note" id="ev-range-note"></p>
+</section>
+
+<section class="panel">
+  <h2>Board</h2>
+  <div class="controls">
+    <div class="seg" id="seg-verdict" role="group" aria-label="Verdict filter">
+      <button data-v="All" class="on">All</button><button data-v="FARM">Farm</button><button data-v="MARGINAL">Marginal</button><button data-v="SKIP">Skip</button>
+    </div>
+    <div class="seg" id="seg-tier" role="group" aria-label="Tier filter">
+      <button data-t="All" class="on">All tiers</button><button data-t="Watchlist">Watchlist</button><button data-t="Early">Early</button><button data-t="Off-list">Off-list</button>
+    </div>
+    <input id="q" type="search" placeholder="Search name or slug">
+    <select id="cat"><option value="">All categories</option></select>
+    <select id="chain"><option value="">All chains</option></select>
+    <select id="sort">
+      <option value="rank">Sort: rank</option><option value="implied">Sort: implied value</option>
+      <option value="tvl">Sort: TVL</option><option value="net">Sort: net / hour</option>
+    </select>
+    <button id="reset">Reset</button>
+    <button id="csv">CSV</button>
+    <button id="json">JSON</button>
+  </div>
+  <div class="scenario">
+    <label>Deposit <select id="dep"><option>100</option><option selected>500</option><option>1000</option><option>2500</option></select> USD</label>
+    <label>Drop share <select id="drop"><option>0.5</option><option selected>1</option><option>2</option></select> %</label>
+    <label>Horizon <select id="hor"><option>4</option><option selected>12</option><option>26</option></select> weeks</label>
+    <span id="scenario-note"></span>
+  </div>
+  <p class="count" id="board-summary"></p>
+  <p class="count farm-only" id="farm-label" hidden></p>
+  <div class="tscroll"><table class="board">
+    <thead><tr><th>#</th><th>Range</th><th>Protocol</th><th>TVL</th><th>7d</th><th>Age</th><th>Token odds</th><th>If it launches</th><th>Implied value</th><th>P25–P75</th><th>Verdict · net of fees</th><th>Net / hour</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div>
+  <p class="note">Click a row for the full work-up: how the figure is made, nearest priced peers, the costed farm verdict with its benchmarks and net grid, and the ten-step plan.</p>
+</section>
+
+<div class="modal-back" id="modal-back" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <button class="close" id="modal-close">Close ✕</button>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
