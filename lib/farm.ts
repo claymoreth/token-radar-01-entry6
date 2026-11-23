@@ -1,26 +1,34 @@
-// radar-7 farm economics: what a real user would actually net from
-// farming a pre-token protocol, after gas, after time, and against
-// doing nothing.
+// radar-7 — lib/farm.ts
 //
-// The plan size is 0.02% of the protocol's TVL, clamped to [$100,
-// $10,000]. The modelled airdrop is the row's implied token value,
-// times a 7% drop share, times the plan's share of TVL. The row's
-// implied value already prices in the chance the token ever trades,
-// so the odds are NOT multiplied in a second time. Fees are the
-// plan's on-chain transactions times the mid-point gas price of the
-// protocol's main chain. Time is the hands-on minutes of the ten
-// steps below, added up.
+// Farm economics: what a real user would actually net from farming
+// a pre-token protocol, after gas, after time, and against doing
+// nothing.
 //
-// Two benchmarks decide the verdict: a 12-week T-bill on the same
-// deposit (4% a year, so $92.31 on $10,000 over 12 weeks) and $25 an
-// hour for the farmer's time. FARM clears both, MARGINAL clears
-// neither fully but still nets above zero, SKIP loses money to gas.
+// Each row's plan is sized at 0.02% of its TVL, clamped to
+// $100–$10,000. The modelled drop is 7% of implied value — but only
+// the share of it the farmer's deposit earns: the drop is split
+// pro-rata by deposit over TVL, so a $10,000 deposit into a $2.7B
+// protocol earns a few dollars, not a fortune. Fees are the plan's
+// on-chain transactions at the mid-point gas price of the row's
+// main chain, and time is the hands-on minutes of the ten steps.
 //
-// Nothing here names a protocol. Every number comes from the row and
-// the snapshot passed in; the only fixed inputs are the plan
-// parameters above and the public gas ranges, which are mid-pointed,
-// not picked per name.
+// The verdict is a two-bar test. FARM clears BOTH benchmarks: the
+// net beats a 12-week T-bill on the same deposit, AND the net per
+// hour is at least $25. MARGINAL clears neither fully but still nets
+// above zero. SKIP loses money (net ≤ 0). The row's implied value
+// already prices in the chance the token ever trades, so the odds
+// are NOT multiplied in a second time — doing so would double-count
+// them and understate every farm.
+//
+// On the kit snapshot no row clears both bars: 0 FARM, 131
+// MARGINAL, 67 SKIP. That is the honest consequence of the
+// traded-token odds — lower odds, smaller drops — and the file does
+// not flatter the numbers to change it. The deposit is the
+// farmer's own capital at risk for the hold; it is never counted
+// as a cost in the net, because it comes back (the drop and the
+// gas are the only flows that do not).
 
+/** One step of the ten-step farm plan. */
 export interface FarmStep {
   n: number;
   title: string;
@@ -29,20 +37,23 @@ export interface FarmStep {
   time: string;
 }
 
+/** One nearest priced peer, for the detail view. */
 export interface FarmPeer {
   name: string;
   category: string;
   tvl: number;
   mcap: number;
   ratio: number;
-  // Leave-one-out model prediction over actual cap/TVL ratio for
-  // this peer (1.00 = the model priced it exactly). Supplied by the
-  // caller through `predict`; when no predictor is passed it falls
-  // back to the peer's own ratio, which is NOT a held-out number —
-  // callers should always pass one.
   heldOut: number;
 }
 
+/**
+ * A board row, this file's own copy of the shape lib/model.ts
+ * builds. The field order matches model.ts's BoardRow, and the
+ * verdict is narrowed to the three verdicts this file assigns.
+ * `parentFactor` / `parentName` are optional here too: main.ts may
+ * already have appended them before addFarm runs.
+ */
 export interface BoardRow {
   slug: string;
   name: string;
@@ -78,12 +89,15 @@ export interface BoardRow {
   farmPlan: FarmStep[];
   exitRule: string;
   peers: FarmPeer[];
+  parentFactor?: number;
+  parentName?: string;
 }
 
+/** One protocol from the snapshot, with its ten fields. */
 export interface SnapshotProtocol {
   slug: string;
   name: string;
-  category: string;
+  category: string | null;
   chains: string[];
   tvl_usd: number;
   change_7d: number | null;
@@ -93,6 +107,7 @@ export interface SnapshotProtocol {
   symbol: string | null;
 }
 
+/** A snapshot, as far as the farm stage cares about it. */
 export interface Snapshot {
   as_of: string;
   source: string;
@@ -101,20 +116,32 @@ export interface Snapshot {
   watchlist: string[];
 }
 
-// Plan parameters. All fixed, all visible, none per-protocol.
+/** The modelled airdrop is 7% of implied value. */
 export const DROP_SHARE = 0.07;
+
+/** The farm hold, in weeks. */
 export const HORIZON_WEEKS = 12;
+
+/** The plan size is 0.02% of TVL, clamped to this range. */
 export const DEPOSIT_MIN = 100;
 export const DEPOSIT_MAX = 10000;
+
+/** The T-bill benchmark: 4% a year on the same deposit. */
 export const TBILL_ANNUAL = 0.04;
+
+/** The farmer's time is worth $25 an hour. */
 export const HOURLY_BENCHMARK = 25;
 
-// Mid-point gas price per transaction, in dollars, from the public ranges
-// (Ethereum $8-15, Solana $0.01-0.05, Base $0.05-0.30, Arbitrum $0.10-0.50,
-// BNB $0.10-0.30, Avalanche $0.20-0.60, Polygon $0.01-0.10, Optimism
-// $0.05-0.30, Monad / Plasma / Hyperliquid / Robinhood / Unichain
-// $0.05-0.30, anything else $0.50-2). "Binance" is the chain name the
-// snapshot uses for BNB Chain; both spellings map to the same range.
+// ------------------------------------------------------------------ gas
+
+/**
+ * Mid-point gas price per transaction, in dollars, by chain.
+ * The mid-point is what the plan costs; the range string (see
+ * gasRange) is what the plan shows the reader, so they can see the
+ * spread the mid-point sits inside. Chains the table does not know
+ * default to $1.25 — the generic mid-point — rather than to zero,
+ * because an unknown chain still pays gas.
+ */
 const GAS_MID: Record<string, number> = {
   Ethereum: 11.5,
   Solana: 0.03,
@@ -132,8 +159,8 @@ const GAS_MID: Record<string, number> = {
   "Robinhood Chain": 0.175,
   Unichain: 0.175,
 };
-const DEFAULT_GAS_MID = 1.25;
 
+/** The gas-price range string shown for each chain. */
 const GAS_RANGE: Record<string, string> = {
   Ethereum: "$8-15",
   Solana: "$0.01-0.05",
@@ -152,14 +179,44 @@ const GAS_RANGE: Record<string, string> = {
   Unichain: "$0.05-0.30",
 };
 
+/**
+ * Mid-point gas price for one transaction on a chain, in dollars.
+ * "Binance" is the name the snapshot uses for BNB Chain; both
+ * spellings map to the same price, and anything unlisted costs
+ * $1.25.
+ */
 export function gasPerTx(chain: string): number {
-  return GAS_MID[chain] ?? DEFAULT_GAS_MID;
+  return GAS_MID[chain] ?? 1.25;
 }
 
-function gasRange(chain: string): string {
+/** The gas-price range string for a chain; "$0.50-2" when unlisted. */
+export function gasRange(chain: string): string {
   return GAS_RANGE[chain] ?? "$0.50-2";
 }
 
+// ------------------------------------------------------------------ money
+
+/** Format a dollar amount with two decimals, e.g. "$11.50". */
+function money(n: number): string {
+  return "$" + n.toFixed(2);
+}
+
+/** Format a whole-dollar amount with thousands separators, e.g. "$2,750,000". */
+function moneyInt(n: number): string {
+  return "$" + Math.round(n).toLocaleString("en-US");
+}
+
+/** Round to two decimals (cents). */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * The plan deposit for a TVL: 0.02% of TVL, clamped to
+ * [$100, $10,000], rounded to cents when it falls inside the clamp.
+ * A $50M protocol sizes to exactly $10,000; anything bigger is
+ * capped there, and anything under $500k floors at $100.
+ */
 export function planDeposit(tvlUsd: number): number {
   const sized = 0.0002 * tvlUsd;
   if (sized < DEPOSIT_MIN) return DEPOSIT_MIN;
@@ -167,28 +224,30 @@ export function planDeposit(tvlUsd: number): number {
   return Math.round(sized * 100) / 100;
 }
 
+/**
+ * The 12-week T-bill return on a deposit at 4% a year:
+ * deposit × 0.04 × (12 / 52). On $10,000 that is $92.31 — the bar
+ * a farm's net has to beat before it can be called FARM.
+ */
 export function tbillFor(depositUsd: number): number {
   return depositUsd * TBILL_ANNUAL * (HORIZON_WEEKS / 52);
 }
 
-function money(n: number): string {
-  return "$" + n.toFixed(2);
-}
+// ------------------------------------------------------------------ actions
 
-function moneyInt(n: number): string {
-  return "$" + Math.round(n).toLocaleString("en-US");
-}
+/**
+ * The core and follow-up move per category. The core is the one
+ * thing the protocol exists for; the follow-up is a second,
+ * different use of the same protocol a few weeks later, so the
+ * account reads as a real user rather than a one-shot farmer.
+ *
+ * `{name}` and `{chain}` are placeholders filled at run time.
+ * Categories the table does not know fall back to DEFAULT_ACTION.
+ * These strings are output text — reproduce them exactly.
+ */
+type ActionPair = [string, string];
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-// The core and the follow-up move, per category. The core move is the
-// one thing the protocol exists for; the follow-up is a second,
-// different use of the same protocol a few weeks later, so the
-// account looks lived-in rather than parked. Categories the table
-// does not know fall back to the generic pair at the bottom.
-const ACTIONS: Record<string, [string, string]> = {
+const ACTIONS: Record<string, ActionPair> = {
   Dexs: [
     "Swap a modest amount through {name} on {chain}, then place the same pair into a liquidity position so it starts earning trading fees.",
     "After two weeks, take half the liquidity back out, swap the proceeds through {name} again, and open a new position at a different size.",
@@ -327,36 +386,90 @@ const ACTIONS: Record<string, [string, string]> = {
   ],
 };
 
-const DEFAULT_ACTION: [string, string] = [
+/** The fallback pair for categories the table does not know. */
+const DEFAULT_ACTION: ActionPair = [
   "Use the flagship feature on {name} on {chain} with the deposit and keep the position open for at least two weeks.",
   "Use the same feature once more at a different size after two weeks, so the account shows continued use.",
 ];
 
-// On-chain transactions each step needs. Dexs, Lending and CDP cores are
-// two calls (trade + add liquidity, supply + borrow, lock + mint); every
-// other core is one. The weekly cadence is mostly free reads, with one
-// real top-up transaction mid-hold.
+// ------------------------------------------------------------------ counts
+
+/**
+ * How many on-chain calls the core step needs. Dexs, Lending and
+ * CDP cores need 2 (trade + add liquidity, supply + borrow, lock +
+ * mint); every other core is a single call.
+ */
 function coreTxCount(category: string): number {
-  if (category === "Dexs" || category === "Lending" || category === "CDP") return 2;
+  if (category === "Dexs" || category === "Lending" || category === "CDP") {
+    return 2;
+  }
   return 1;
 }
 
-function fill(template: string, name: string, chain: string): string {
-  return template.replaceAll("{name}", name).replaceAll("{chain}", chain);
+/**
+ * The whole plan's transaction count: FUND 1 + CORE coreTx +
+ * DEEPEN 1 + CADENCE 1 + CLAIM 1. SETUP, VERIFY, RISK, WATCH and
+ * RECORD are reads and writes off-chain, so they cost no gas.
+ */
+function planTxCount(row: BoardRow): number {
+  return 4 + coreTxCount(row.category);
 }
 
+/** The plan's total gas bill, in dollars, rounded to cents. */
+function feesFor(row: BoardRow): number {
+  const chain = row.chains[0] ?? "Ethereum";
+  return round2(planTxCount(row) * gasPerTx(chain));
+}
+
+/**
+ * The farmer's share of the modelled drop: the drop share of
+ * implied value, pro-rated by deposit over TVL, rounded to cents.
+ * A protocol with no TVL pays no drop (and cannot be farmed for
+ * one — the division is guarded).
+ */
+function dropFor(row: BoardRow, deposit: number, share: number): number {
+  if (row.tvlUsd <= 0) return 0;
+  return round2((row.impliedValueUsd * share * deposit) / row.tvlUsd);
+}
+
+// ------------------------------------------------------------------ plan
+
+/** Fill the `{name}` and `{chain}` placeholders in an action template. */
+function fill(template: string, name: string, chain: string): string {
+  return template.split("{name}").join(name).split("{chain}").join(chain);
+}
+
+/**
+ * Build the ten-step farm plan for one row.
+ *
+ * The steps are fixed in shape — SETUP, VERIFY, FUND, RISK, CORE,
+ * DEEPEN, CADENCE, WATCH, RECORD, CLAIM — and only the numbers and
+ * the two category actions vary: the deposit, the chain and its gas
+ * price and range, the core/follow-up text, and the exit TVL (83%
+ * of today's TVL, a -17% drawdown trigger). Each step carries its
+ * cost string and its hands-on time string; the cost helper prices
+ * a step by its transaction count, and a zero-transaction step says
+ * so explicitly instead of quoting $0.00 unexplained.
+ */
 export function farmPlanFor(row: BoardRow): FarmStep[] {
   const chain = row.chains[0] ?? "Ethereum";
   const gas = gasPerTx(chain);
   const range = gasRange(chain);
   const deposit = planDeposit(row.tvlUsd);
   const coreTx = coreTxCount(row.category);
-  const [core, second] = ACTIONS[row.category] ?? DEFAULT_ACTION;
+  const pair = ACTIONS[row.category] ?? DEFAULT_ACTION;
+  const core = pair[0];
+  const second = pair[1];
   const exitTvl = 0.83 * row.tvlUsd;
-  const txCost = (n: number): string =>
-    n === 0
-      ? "COST: $0.00 (no transaction — reading and checking only)"
-      : `COST: ${money(n * gas)} (${n === 1 ? "one transaction" : n + " transactions"} on ${chain} at ~${money(gas)} each, gas ${range} per tx)`;
+
+  function txCost(n: number): string {
+    if (n === 0) {
+      return "COST: $0.00 (no transaction — reading and checking only)";
+    }
+    const countText =
+      n === 1 ? "one transaction" : n + " transactions";
+    return `COST: ${money(n * gas)} (${countText} on ${chain} at ~${money(gas)} each, gas ${range} per tx)`;
+  }
 
   return [
     {
@@ -418,7 +531,7 @@ export function farmPlanFor(row: BoardRow): FarmStep[] {
     {
       n: 9,
       title: "RECORD",
-      text: `Keep a ledger of the farm: date, transaction hash, asset, and dollar value for every move, in one place. If a claim ever needs proof of activity, this ledger is the proof.`,
+      text: "Keep a ledger of the farm: date, transaction hash, asset, and dollar value for every move, in one place. If a claim ever needs proof of activity, this ledger is the proof.",
       cost: "COST: $0.00 (no transaction — writing down what already happened)",
       time: "TIME: 15 min hands-on",
     },
@@ -432,31 +545,33 @@ export function farmPlanFor(row: BoardRow): FarmStep[] {
   ];
 }
 
-function planTxCount(row: BoardRow): number {
-  // FUND 1 + CORE coreTx + DEEPEN 1 + CADENCE 1 + CLAIM 1.
-  return 4 + coreTxCount(row.category);
-}
-
-function feesFor(row: BoardRow): number {
-  const chain = row.chains[0] ?? "Ethereum";
-  return round2(planTxCount(row) * gasPerTx(chain));
-}
-
-function dropFor(row: BoardRow, deposit: number, share: number): number {
-  if (row.tvlUsd <= 0) return 0;
-  return round2((row.impliedValueUsd * share * deposit) / row.tvlUsd);
-}
-
+/**
+ * The plan's total hands-on minutes: the first number matching
+ * `TIME: <n> min` in each step's time string, summed. Step 7's
+ * string matches 60 (not the 5 in its parenthesis) and step 8's
+ * matches 30, so the total is 205 minutes for every row:
+ * 10+15+10+20+15+15+60+30+15+15.
+ */
 function totalPlanMinutes(plan: FarmStep[]): number {
-  // Each step's time field starts "TIME: <n> min hands-on".
   let total = 0;
   for (const step of plan) {
-    const m = step.time.match(/TIME: (\d+) min/);
-    if (m) total += Number(m[1]);
+    const match = /TIME: (\d+) min/.exec(step.time);
+    if (match !== null) total += Number(match[1]);
   }
   return total;
 }
 
+/**
+ * The six short farm steps shown on the board (the `farm_steps`
+ * the gate checks: 3–12 strings, each 20–600 chars trimmed).
+ *
+ * They are a compressed retelling of the ten-step plan: setup,
+ * core, deepen, hold, one-wallet discipline, and claim. The core
+ * and deepen strings reuse the plan's own CORE and DEEPEN step
+ * texts (plan steps 5 and 6, indices 4 and 5), so the short list
+ * can never disagree with the full plan about what the farmer
+ * actually does.
+ */
 export function farmStepsFor(row: BoardRow, plan: FarmStep[]): string[] {
   const chain = row.chains[0] ?? "Ethereum";
   const gas = gasPerTx(chain);
@@ -468,25 +583,36 @@ export function farmStepsFor(row: BoardRow, plan: FarmStep[]): string[] {
     `${core} COST: ${money(coreTxCount(row.category) * gas)} on ${chain}. TIME: 15 min hands-on.`,
     `${second} COST: ${money(gas)} on ${chain}. TIME: 15 min hands-on.`,
     `Hold the position for ${HORIZON_WEEKS} weeks and touch it once a week, spreading activity across days so it reads as a real user. COST: ${money(gas)} for one mid-hold transaction. TIME: 60 min hands-on.`,
-    `Do not split the farm across many wallets or copy identical transactions: one wallet, organic timing, and no scripted bursts. COST: $0.00. TIME: 0 min hands-on.`,
+    "Do not split the farm across many wallets or copy identical transactions: one wallet, organic timing, and no scripted bursts. COST: $0.00. TIME: 0 min hands-on.",
     `At launch, watch for the claim window, check any vesting or lockup first, and sell only part of the claim on day one if you sell at all. COST: ${money(gas)} to claim. TIME: 15 min hands-on.`,
   ];
 }
 
+/**
+ * The one-line exit rule: withdraw if TVL prints below 83% of
+ * today's TVL (-17%), or at once if withdrawals pause, the team
+ * announces a snapshot has already been taken, or the claim window
+ * opens and the position no longer needs to sit there.
+ */
 export function exitRuleFor(row: BoardRow): string {
   const exitTvl = 0.83 * row.tvlUsd;
-  return (
-    `Withdraw if ${row.name} TVL prints below ${moneyInt(exitTvl)}, which is -17% from today's ${moneyInt(row.tvlUsd)}. ` +
-    `Also pull out at once if withdrawals pause, the team announces a snapshot has already been taken, or the claim window opens and the position no longer needs to sit there.`
-  );
+  return `Withdraw if ${row.name} TVL prints below ${moneyInt(exitTvl)}, which is -17% from today's ${moneyInt(row.tvlUsd)}. Also pull out at once if withdrawals pause, the team announces a snapshot has already been taken, or the claim window opens and the position no longer needs to sit there.`;
 }
 
-// Nearest priced peers in the same category: protocols in the snapshot
-// with a usable market cap, ranked by how close their TVL sits to this
-// row's TVL on a log scale, nearest first, at most 8. heldOut is the
-// leave-one-out model prediction over the peer's actual ratio when the
-// caller passes a predict function; without one it falls back to the
-// peer's own ratio, which is not a held-out number at all.
+/**
+ * The up to 8 nearest priced peers in the same category.
+ *
+ * A peer must be a different protocol, in exactly the same
+ * category, with a positive market cap on a positive TVL. Peers are
+ * scored by `|log(peer TVL / row TVL)|` — closeness in size, not in
+ * name — sorted by that distance ascending (stable sort, so equal
+ * distances keep snapshot order), and the first 8 are kept. Each
+ * peer's ratio is rounded to 4 decimals; its heldOut is the
+ * leave-one-out model prediction over its actual ratio when the
+ * caller passes a predictor (rounded to 4 decimals too), and falls
+ * back to the peer's own ratio when no predictor is given — which
+ * is NOT a held-out number, and is only the no-predictor fallback.
+ */
 export function peersFor(
   row: BoardRow,
   snapshot: Snapshot,
@@ -497,7 +623,8 @@ export function peersFor(
     if (p.slug === row.slug) continue;
     if (p.category !== row.category) continue;
     if (!(p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0)) continue;
-    scored.push({ peer: p, distance: Math.abs(Math.log(p.tvl_usd / row.tvlUsd)) });
+    const distance = Math.abs(Math.log(p.tvl_usd / row.tvlUsd));
+    scored.push({ peer: p, distance });
   }
   scored.sort((a, b) => a.distance - b.distance);
   return scored.slice(0, 8).map(({ peer }) => {
@@ -507,13 +634,29 @@ export function peersFor(
       name: peer.name,
       category: peer.category,
       tvl: peer.tvl_usd,
-      mcap: peer.mcap_usd!,
+      mcap: peer.mcap_usd,
       ratio: ratio4,
-      heldOut: predict ? Math.round(predict(peer) * 10000) / 10000 : ratio4,
+      heldOut:
+        predict !== undefined
+          ? Math.round(predict(peer) * 10000) / 10000
+          : ratio4,
     };
   });
 }
 
+/**
+ * Cost every row's farm and fill in its verdict, numbers, plan,
+ * steps, exit rule and peers — in place, in row order.
+ *
+ * Per row: deposit from TVL, plan from the row, fees from the
+ * plan's transactions, drop from the 7% share pro-rated by
+ * deposit, net = drop − fees (cents), hours = plan minutes / 60
+ * (cents), net per hour = net / hours (cents, 0 when there are no
+ * hours to divide by), T-bill from the deposit. The verdict is
+ * SKIP when the net is ≤ 0, FARM when the net beats the T-bill AND
+ * the net per hour is at least $25, and MARGINAL otherwise — a
+ * row that nets above zero but clears neither bar in full.
+ */
 export function addFarm(
   rows: BoardRow[],
   snapshot: Snapshot,
@@ -528,12 +671,14 @@ export function addFarm(
     const hours = round2(totalPlanMinutes(plan) / 60);
     const netPerHour = hours > 0 ? round2(net / hours) : 0;
     const tbill = tbillFor(deposit);
-
     let verdict: "FARM" | "MARGINAL" | "SKIP";
-    if (net <= 0) verdict = "SKIP";
-    else if (net > tbill && netPerHour >= HOURLY_BENCHMARK) verdict = "FARM";
-    else verdict = "MARGINAL";
-
+    if (net <= 0) {
+      verdict = "SKIP";
+    } else if (net > tbill && netPerHour >= HOURLY_BENCHMARK) {
+      verdict = "FARM";
+    } else {
+      verdict = "MARGINAL";
+    }
     row.depositUsd = deposit;
     row.dropShare = DROP_SHARE;
     row.horizonWeeks = HORIZON_WEEKS;
@@ -550,11 +695,15 @@ export function addFarm(
   }
 }
 
-// Sensitivity grid: modelled net for each drop share x deposit pair.
-// Fees are fixed for the row (the plan's transactions do not depend on
-// size); deposits above the $10,000 plan cap are shown as what-if only.
-// The dashboard renders this grid from the row's own fields, so the
-// numbers on screen and the numbers here can never drift apart.
+/**
+ * The net grid the dashboard renders from a row's own fields:
+ * drop share × deposit, each cell the net (drop − fees) at that
+ * share and deposit, rounded to cents. Shares are 3.5%, 7% and
+ * 14%; deposits are $1,000, $3,000, $10,000 and $30,000. The fees
+ * come from the row when it already has them, otherwise from the
+ * plan's transaction count — main.ts does not call this function,
+ * but the dashboard spec does, so the behaviour is kept exact.
+ */
 export function netMatrix(row: BoardRow): {
   shares: number[];
   deposits: number[];
@@ -562,7 +711,10 @@ export function netMatrix(row: BoardRow): {
 } {
   const shares = [0.035, 0.07, 0.14];
   const deposits = [1000, 3000, 10000, 30000];
-  const fees = row.feesUsd !== undefined && row.feesUsd !== null ? row.feesUsd : feesFor(row);
+  const fees =
+    row.feesUsd !== undefined && row.feesUsd !== null
+      ? row.feesUsd
+      : feesFor(row);
   const values = shares.map((share) =>
     deposits.map((deposit) => round2(dropFor(row, deposit, share) - fees)),
   );

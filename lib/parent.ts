@@ -1,22 +1,41 @@
-// radar-7 parent products: the fixed list of product lines that
-// belong to a parent protocol or company, not standalone launches.
+// radar-7 — lib/parent.ts
 //
-// Ported verbatim from the v4 entry (entry4 lib/model.ts:124-145).
-// Each value is v4's description of the line, not a parent name, and
-// the list's claim — that the line will never issue a token of its
-// own — is v4's model assumption, not a fact verified per protocol
-// here.
+// The 20 parent-product lines and the ×0.48 factor.
 //
-// One home for the list, imported by both main.ts (which discounts
-// the board) and lib/model.ts (which needs the same factor when it
-// re-ranks the board inside the bootstrap, so the rank range is
-// measured on the discounted board the reader actually sees, not on
-// the pre-discount drafts). Matching is by exact slug,
-// case-sensitive — no substring or name matching.
+// Some board rows are not standalone protocols at all: they are one
+// product line of a larger parent that already records a token of its
+// own. A line like that cannot launch a token of its own at full
+// value, so the board keeps only 48% of its fitted implied value and
+// marks the row off-list, labelled with the description of the line.
+//
+// The list itself is a fixed data table ported from the v4 entry, and
+// the descriptions are v4's descriptions of each line — they are NOT
+// parent names, and they must not be "improved" or renamed. Matching
+// is by exact slug, case-sensitive. No substring matching, no name
+// matching: a slug either is on this list, letter for letter, or it
+// is not a parent-product line.
+//
+// The same factor is used in two places, so it lives here once: the
+// runner (main.ts) discounts the finished board, and the value model
+// (lib/model.ts) discounts inside the bootstrap so the rank ranges
+// are measured on the discounted board the reader actually sees.
+// Both places call parentScale, so the two can never drift apart.
+// A listed slug with no row on the board is simply ignored by the
+// runner — it is not an error, and no dummy row is invented for it.
 
-/** A parent product's line keeps this share of its fitted value. */
+/**
+ * The share of fitted value a parent product's line keeps: 48%.
+ * Every discounted value is `max(1, round(v * 0.48))` — see
+ * parentScale below — so a discounted line can never drop to zero.
+ */
 export const PARENT_FACTOR = 0.48;
 
+/**
+ * Slug → description of the line, exactly 20 entries, in the order
+ * the v4 entry listed them. The description is what the dashboard
+ * shows for the row; it describes the line (a perps desk, a vault
+ * product, an exchange arm), not the parent company behind it.
+ */
 export const PARENT_PRODUCTS: Record<string, string> = {
   "arcus-perps": "Arcus perps desk",
   "avant-avusd": "Avant avUSD stablecoin",
@@ -40,7 +59,14 @@ export const PARENT_PRODUCTS: Record<string, string> = {
   "usdcx": "Circle USDCx wrapped product",
 };
 
-/** The discounted value of a fitted figure, as the board shows it. */
+/**
+ * Scale one fitted value by the parent factor.
+ *
+ * Multiplies by PARENT_FACTOR, rounds to the nearest whole dollar,
+ * and floors at $1. The floor matters for tiny lines: without it a
+ * small fitted value could round down to nothing, and a board row
+ * with a $0 implied value would be nonsense.
+ */
 export function parentScale(v: number): number {
   return Math.max(1, Math.round(v * PARENT_FACTOR));
 }
